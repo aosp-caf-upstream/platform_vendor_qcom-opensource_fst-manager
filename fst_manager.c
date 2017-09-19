@@ -46,6 +46,8 @@
 #define FST_LLT_SWITCH_IMMEDIATELY 0
 #define LLT_UNIT_US        32 /* See 10.32.2.2  Transitioning between states */
 #define MS_TO_LLT_VALUE(l) (((l) * 1000) / LLT_UNIT_US)
+#define SNR_THRESH_ENABLE "22 27"
+#define SNR_THRESH_DISABLE "0 0"
 
 struct fst_mgr
 {
@@ -444,14 +446,6 @@ static void _fst_mgr_session_reset(struct fst_mgr_session *s,
 
 static void _fst_mgr_session_deinit(struct fst_mgr_session *s)
 {
-	if (s->llt > 0)
-		/*
-		 * at this point the active interface is the one with highest
-		 * priority but backup interface is no longer available.
-		 * Set active interface to default link loss behavior.
-		 */
-		_fst_mgr_session_set_link_loss(s, false);
-
 	dl_list_del(&s->grp_lentry);
 	fst_session_remove(s->id);
 	os_free(s);
@@ -840,6 +834,23 @@ error_init:
  * FST Manager Group
  */
 
+static struct fst_mgr_iface *
+_fst_mgr_group_get_highest_iface(struct fst_mgr_group *g)
+{
+	struct fst_mgr_iface *i;
+	struct fst_mgr_iface *highest_iface = NULL;
+	int highest_prio = -1;
+
+	_fst_grp_foreach_iface(g, i) {
+		if (i->info.priority > highest_prio) {
+			highest_prio = i->info.priority;
+			highest_iface = i;
+		}
+	}
+
+	return highest_iface;
+}
+
 static struct fst_mgr_peer *_fst_mgr_group_peer_by_addr(struct fst_mgr_group *g,
 		const u8 *addr)
 {
@@ -1136,6 +1147,98 @@ static struct fst_mgr_group *_fst_mgr_group_by_session_id(struct fst_mgr *mgr,
 	return NULL;
 }
 
+static int
+fst_mgr_set_snr_thresh_sysfs(const char *ifname, bool enable)
+{
+	char fname[128];
+	FILE *f;
+
+	if (ifname == NULL)
+		return -1;
+
+	if (snprintf(fname, sizeof(fname), "/sys/class/net/%s/device/wil6210/snr_thresh",
+		     ifname) < 0)
+		return -1;
+
+	f = fopen(fname, "r+");
+	if (!f) {
+		fst_mgr_printf(MSG_ERROR, "failed to open: %s", fname);
+		return -1;
+	}
+
+	if (fprintf(f, enable ? SNR_THRESH_ENABLE : SNR_THRESH_DISABLE) < 0) {
+		fclose(f);
+		return -1;
+	}
+	fclose(f);
+
+	return 0;
+}
+
+static void _fst_mgr_on_disconnected_set_snr_thresh(struct fst_mgr_group *g,
+	struct fst_mgr_iface *disconn_iface)
+{
+	struct fst_mgr_iface *highest_iface;
+	int ret;
+	struct fst_mgr_peer *p;
+
+	if (!fst_is_supplicant())
+		/* not relevant on AP */
+		return;
+
+	highest_iface = _fst_mgr_group_get_highest_iface(g);
+	if (!highest_iface ||
+	    !os_strncmp(highest_iface->info.name, disconn_iface->info.name, FST_MAX_INTERFACE_SIZE))
+		/* not backup interface (highest priority interface) */
+		return;
+
+	/* check there are no backup interfaces connected */
+	_fst_grp_foreach_peer(g, p) {
+		struct fst_mgr_peer_iface *pi;
+		_fst_peer_foreach_iface(p, pi) {
+			if (os_strncmp(pi->iface->info.name, highest_iface->info.name, FST_MAX_INTERFACE_SIZE))
+				return;
+		}
+	}
+
+	fst_mgr_printf(MSG_INFO, "no backup interfaces. set highest priority interface (%s) to normal SNR threshold",
+		highest_iface->info.name);
+	ret = fst_mgr_set_snr_thresh_sysfs(highest_iface->info.name, false);
+	if (ret < 0)
+		fst_mgr_printf(MSG_WARNING, "failed to set snr threshold on %s", highest_iface->info.name);
+	else
+		fst_mgr_printf(MSG_INFO, "snr threshold on %s set successfully", highest_iface->info.name);
+}
+
+static void _fst_mgr_on_connected_set_snr_thresh(struct fst_mgr_group *g,
+	struct fst_mgr_iface *conn_iface, const u8* addr)
+{
+	struct fst_mgr_iface *highest_iface;
+	int ret;
+
+	if (!fst_is_supplicant())
+		/* not relevant on AP */
+		return;
+
+	if (fst_get_peer_mbies(conn_iface->info.name, addr, NULL) <= 0)
+		/* not relevant if peer is not FST capable */
+		return;
+
+	highest_iface = _fst_mgr_group_get_highest_iface(g);
+	if (!highest_iface ||
+	    os_strncmp(highest_iface->info.name, conn_iface->info.name, FST_MAX_INTERFACE_SIZE) == 0)
+		/* not backup interface (highest priority interface) */
+		return;
+
+	fst_mgr_printf(MSG_INFO, "backup interface (%s) connected. set highest priority interface (%s) to high SNR threshold",
+		conn_iface->info.name, highest_iface->info.name);
+	ret = fst_mgr_set_snr_thresh_sysfs(highest_iface->info.name, true);
+	if (ret < 0)
+		fst_mgr_printf(MSG_WARNING, "failed to set snr threshold on %s", highest_iface->info.name);
+	else
+		fst_mgr_printf(MSG_INFO, "snr threshold on %s set successfully", highest_iface->info.name);
+}
+
 static void _fst_mgr_on_peer_connected(struct fst_mgr *mgr,
 		const char *ifname,
 		const u8* addr)
@@ -1159,6 +1262,8 @@ static void _fst_mgr_on_peer_connected(struct fst_mgr *mgr,
 
 	if (fst_cfgmgr_on_connect(&g->info, ifname, addr))
 		return;
+
+	_fst_mgr_on_connected_set_snr_thresh(g, i, addr);
 
 	p = _fst_mgr_group_peer_by_other_addr(g, addr, &i->info);
 	if (!p) {
@@ -1284,6 +1389,8 @@ static void _fst_mgr_on_peer_disconnected(struct fst_mgr *mgr,
 
 		_fst_mgr_peer_try_to_initiate_next_setup(p, g);
 	}
+
+	_fst_mgr_on_disconnected_set_snr_thresh(g, i);
 
 	fst_cfgmgr_on_disconnect(&g->info, ifname, addr);
 }
