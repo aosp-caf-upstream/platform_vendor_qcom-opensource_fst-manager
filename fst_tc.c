@@ -886,6 +886,7 @@ int fst_tc_start(struct fst_tc *f, const char *ifname)
 
 	/* cleanup previously installed qdisc if any. ignore errors */
 	fst_tc_del_multiq_qdisc(f);
+	fst_tc_del_ingress_qdisc(f);
 
 	if (fst_tc_add_multiq_qdisc(f)) {
 		fst_mgr_printf(MSG_ERROR, "Cannot add multiq qdisc for bond#%s",
