@@ -143,7 +143,7 @@ int main(int argc, char *argv[])
 		{"logfile",  required_argument, NULL, 'f'},
 		{"usage",    no_argument, NULL, 'u'},
 		{"help",     no_argument, NULL, 'h'},
-		{NULL}
+		{}
 	};
 	int res = -1;
 	char short_opts[] = "VBbc:r:nd::f:uh";

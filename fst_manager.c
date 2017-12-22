@@ -140,10 +140,10 @@ static const u8 *_fst_mgr_peer_get_addr_of_iface(struct fst_mgr_peer *p,
 static const char *state_name(enum fst_mgr_session_state state)
 {
 	static const char *state_names[] = {
-		[FST_MGR_SESSION_STATE_IDLE] "IDLE",
-		[FST_MGR_SESSION_STATE_INITIATED] "INITIATED",
-		[FST_MGR_SESSION_STATE_ESTABLISHED] "ESTABLISHED",
-		[FST_MGR_SESSION_STATE_IN_TRANSITION] "IN TRANSITION",
+		[FST_MGR_SESSION_STATE_IDLE] = "IDLE",
+		[FST_MGR_SESSION_STATE_INITIATED] = "INITIATED",
+		[FST_MGR_SESSION_STATE_ESTABLISHED] = "ESTABLISHED",
+		[FST_MGR_SESSION_STATE_IN_TRANSITION] = "IN TRANSITION",
 	};
 
 	if (state >= sizeof(state_names)/sizeof(state_names[0]) ||
