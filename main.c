@@ -46,6 +46,9 @@
 #include "fst_manager.h"
 #include "fst_ctrl.h"
 #include "fst_cfgmgr.h"
+#ifdef ANDROID
+#include "cutils/properties.h"
+#endif
 
 #define DEFAULT_FST_INIT_RETRY_PERIOD_SEC 1
 #define MAX_CTRL_IFACE_SIZE 256
@@ -92,6 +95,10 @@ static void usage(const char *prog)
 	       "\t--debug, -d         - increase debugging verbosity (-dd - more, "
 			"-ddd - even more)\n"
 	       "\t--logfile, -f <file>- log output to specified file\n"
+#ifdef ANDROID
+	       "\t--autogen, -a <mode>- auto-generate fstman.ini for android "
+			" (mode: 0=supplicant 1=softap)\n"
+#endif
 	       "\t--usage, -u         - this message\n"
 	       "\t--help, -h          - this message\n");
 	exit(2);
@@ -129,6 +136,122 @@ error_fst_ctrl_create:
 	return;
 }
 
+#ifdef ANDROID
+
+static const char FSTMAN_IFNAME[] = "wlan0";
+static const char FSTMAN_WIGIG_IFNAME[] = "wigig0";
+static const char FSTMAN_DATA_IFNAME[] = "bond0";
+static const char FSTMAN_SAP_IFNAME[] = "wlan0";
+static const char FSTMAN_WIGIG_IF_CHANNEL[] = "2";
+static const char FST_STA_INTERFACE_PROP_NAME[] =
+	"persist.vendor.fst.wifi.sta.interface";
+static const char FST_SAP_INTERFACE_PROP_NAME[] =
+	"persist.vendor.fst.wifi.sap.interface";
+static const char FST_DATA_INTERFACE_PROP_NAME[] =
+	"persist.vendor.fst.data.interface";
+static const char FST_WIGIG_INTERFACE_PROP_NAME[] =
+	"persist.vendor.fst.wigig.interface";
+static const char FST_WIGIG_INTERFACE_CHANNEL_PROP_NAME[] =
+	"persist.vendor.fst.wigig.interface.channel";
+
+static int create_fstman_ini_file(int softap_mode, char *buf, int len)
+{
+	char fst_iface1[PROPERTY_VALUE_MAX] = { '\0' };
+	char fst_iface2[PROPERTY_VALUE_MAX] = { '\0' };
+	char fst_data_iface[PROPERTY_VALUE_MAX] = { '\0' };
+	char fst_wigig_channel[PROPERTY_VALUE_MAX] = { '\0' };
+	int result;
+
+	if (softap_mode)
+		property_get(FST_SAP_INTERFACE_PROP_NAME, fst_iface1,
+			     FSTMAN_SAP_IFNAME);
+	else
+		property_get(FST_STA_INTERFACE_PROP_NAME, fst_iface1,
+			     FSTMAN_IFNAME);
+	property_get(FST_WIGIG_INTERFACE_PROP_NAME, fst_iface2,
+		     FSTMAN_WIGIG_IFNAME);
+	property_get(FST_DATA_INTERFACE_PROP_NAME, fst_data_iface,
+		     FSTMAN_DATA_IFNAME);
+	property_get(FST_WIGIG_INTERFACE_CHANNEL_PROP_NAME, fst_wigig_channel,
+		     FSTMAN_WIGIG_IF_CHANNEL);
+
+	result = snprintf(buf, len,
+		 "[fst_manager]\n"
+		 "ctrl_iface=/data/vendor/wifi/hostapd/global\n"
+		 "groups=%s\n" /* bond0 */
+		 "\n"
+		 "[%s]\n" /* bond0 */
+		 "interfaces=%s,%s\n" /* wlan0,wigig0 */
+		 "mux_type=bonding\n"
+		 "mux_ifname=%s\n" /* bond0 */
+		 "mux_managed=1\n"
+		 "mac_address_by=%s\n" /* wlan0 */
+		 "rate_upgrade_master=%s\n" /* wlan0 */
+		 "txqueuelen=100\n"
+		 "rate_upgrade_acl_file=/data/vendor/wifi/fst_rate_upgrade.accept\n"
+		 "\n"
+		 "[%s]\n" /* wlan0 */
+		 "priority=100\n"
+		 "default_llt=3600\n"
+		 "\n"
+		 "[%s]\n" /* wigig0 */
+		 "priority=110\n"
+		 "wpa_group=GCMP\n"
+		 "wpa_pairwise=GCMP\n"
+		 "hw_mode=ad\n"
+		 "channel=%s\n",
+		 fst_data_iface,
+		 fst_data_iface,
+		 fst_iface1, fst_iface2,
+		 fst_data_iface,
+		 fst_iface1,
+		 fst_iface1,
+		 fst_iface1,
+		 fst_iface2,
+		 fst_wigig_channel
+	 );
+
+	return result;
+}
+
+static bool write_fstman_ini_file(const char *fname, const char *contents, int len)
+{
+	FILE *f;
+	int written;
+
+	f = fopen(fname, "w");
+	if (!f) {
+		fst_mgr_printf(MSG_ERROR,
+			"fail to open %s for writing\n", fname);
+		return false;
+	}
+	written = fwrite(contents, 1, len, f);
+	fclose(f);
+	if (written != len) {
+		fst_mgr_printf(MSG_ERROR,
+			"fail to write to %s\n", fname);
+		return false;
+	}
+
+	return true;
+}
+
+static int fst_manager_gen_fstman_ini(const char *fname, int softap_mode)
+{
+	char cfg[2048];
+	int len;
+
+	len = create_fstman_ini_file(softap_mode, cfg, sizeof(cfg));
+	if (len <= 0)
+		return -1;
+	if (!write_fstman_ini_file(fname, cfg, len))
+		return -1;
+
+	return 0;
+}
+
+#endif /* ANDROID */
+
 int main(int argc, char *argv[])
 {
 	const struct option long_opts[] = {
@@ -141,15 +264,16 @@ int main(int argc, char *argv[])
 		{"force-nc", no_argument, NULL, 'n'},
 		{"debug",    optional_argument, NULL, 'd'},
 		{"logfile",  required_argument, NULL, 'f'},
+		{"autogen",  required_argument, NULL, 'a'},
 		{"usage",    no_argument, NULL, 'u'},
 		{"help",     no_argument, NULL, 'h'},
 		{}
 	};
 	int res = -1;
-	char short_opts[] = "VBbc:r:nd::f:uh";
+	char short_opts[] = "VBbc:r:nd::f:a:uh";
 	const char *ctrl_iface = NULL;
 	char *fstman_config_file = NULL;
-	int opt, i;
+	int opt, i, mode;
 	char buf[MAX_CTRL_IFACE_SIZE];
 
 	while ((opt = getopt_long_only(argc, argv, short_opts, long_opts, NULL))
@@ -208,6 +332,24 @@ int main(int argc, char *argv[])
 				goto error_cfmgr_params;
 			}
 			break;
+#ifdef ANDROID
+		case 'a':
+			if (fstman_config_file == NULL) {
+				fst_mgr_printf(MSG_ERROR,
+					"Config file must be specified\n");
+				goto error_cfmgr_params;
+			}
+			mode = optarg ? strtoul(optarg, NULL, 0) : 0;
+			res = fst_manager_gen_fstman_ini(
+				fstman_config_file, mode);
+			if (res < 0) {
+				fst_mgr_printf(MSG_ERROR,
+					"fstman.ini gen failure, err: %d\n",
+					res);
+				goto error_cfmgr_params;
+			}
+			break;
+#endif
 		case 'u':
 		case 'h':
 		case '?':
