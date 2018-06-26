@@ -1152,6 +1152,7 @@ fst_mgr_set_snr_thresh_sysfs(const char *ifname, bool enable)
 {
 	char fname[128];
 	FILE *f;
+	int ret;
 
 	if (ifname == NULL)
 		return -1;
@@ -1166,7 +1167,11 @@ fst_mgr_set_snr_thresh_sysfs(const char *ifname, bool enable)
 		return -1;
 	}
 
-	if (fprintf(f, enable ? SNR_THRESH_ENABLE : SNR_THRESH_DISABLE) < 0) {
+	if (enable)
+		ret = fprintf(f, SNR_THRESH_ENABLE);
+	else
+		ret = fprintf(f, SNR_THRESH_DISABLE);
+	if (ret < 0) {
 		fclose(f);
 		return -1;
 	}
