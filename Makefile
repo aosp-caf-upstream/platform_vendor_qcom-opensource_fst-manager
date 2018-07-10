@@ -106,10 +106,6 @@ endif
 
 fstman: $(all_objs)
 
-ifneq ($(is_ipq806x), 1)
-fstman: $(LIBS)
-endif
-
 prod prof: CFLAGS += -O2
 prof: CFLAGS += -pg
 
