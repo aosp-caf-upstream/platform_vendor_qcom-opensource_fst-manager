@@ -14,7 +14,7 @@
 #ifdef ANDROID
 #include <sys/capability.h>
 #include <sys/prctl.h>
-#include <private/android_filesystem_config.h>
+#include <cutils/android_filesystem_config.h>
 #endif /* ANDROID */
 
 #include "os.h"
