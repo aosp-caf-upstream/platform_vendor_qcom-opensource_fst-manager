@@ -23,7 +23,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <cutils/sockets.h>
-#include "private/android_filesystem_config.h"
+#include "cutils/android_filesystem_config.h"
 #endif /* ANDROID */
 
 #ifdef CONFIG_CTRL_IFACE_UDP_IPV6
